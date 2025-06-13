@@ -164,7 +164,19 @@ class BRVMDatabase:
                 print("Date non convertible: " + str(e))
         return not (missing1 or missing2)
 
+    def update(self):
+        print("=====================Before daily update:=============================\n")
+        self.status()
+        print("\n=====================Begin daily update:=============================\n")
+        self.insert_daily_per()
+        self.insert_daily_prices()
+        self.insert_daily_indices()
+        print("\n\n=============================After daily update:=======================\n")
+        self.status()
+
+
     """##################################  DELETE/UNDO #################################"""
+
     def _remove_last_commit(self):
         self._connect()
         self.conn.rollback()
@@ -203,6 +215,7 @@ class BRVMDatabase:
         self.execute_query(query)
 
     """##################################  SETTER/INSERTION #################################"""
+
     def set_value(self, table: str, set_clause: str, condition: str):
         query = f"UPDATE {table} SET {set_clause} WHERE {condition}"
         self.execute_query(query)
@@ -240,11 +253,31 @@ class BRVMDatabase:
             print("No new daily data to insert. All entries already exist.")
 
         self.close()
+        self.execute_query(f"DELETE FROM stock_prices WHERE Ticker LIKE '%BRVM%'")
+
+    def insert_daily_indices(self):
+        df = self.get_last_prices()
+        df.index = df["Ticker"]
+        df = df.loc[[e for e in df["Ticker"] if "BRVM" in e]]
+        df = self.dp.reset_df_index(df)
+        self.validate_dataframe(df, "indices_performances")
+        if "index" in df:
+            df = df.drop("index", axis=1)
+        if "Variation" in df:
+            df = df.drop("Variation", axis=1)
+        if not df.empty:
+            self._connect()
+            df.to_sql('indices_performances', self.conn, if_exists='append', index=False)
+            print(f"Inserted {len(df)} new daily rows into 'indices' table.")
+        else:
+            print("No new daily data to insert. All entries already exist.")
+
+        self.close()
 
     def insert_daily_per(self):
         per = self.dp.get_table_from_url("brvm", "per")
         per["Ticker"] = list(per.index)
-        per["Date"] = self.dp.get_last_business_day()
+        per["Date"] = self.dp.make_date(self.dp.get_last_business_day())
         per = per[["Ticker"] + list(per.columns)[:-1]]
         per.columns = self._get_table_columns("per_data")
         self.insert_dataframe(per, "per_data")
@@ -299,15 +332,20 @@ class BRVMDatabase:
         self.close()
         return res
 
-    def get_last_prices(self):
+    def get_last_prices(self, type="stock"):
         daily_df1, daily_df2 = self.dp.get_today_data_from_sikafin()
 
         daily_df1["Volume"] = daily_df2["Volume"]
         daily_df1["Ticker"] = daily_df1.index
         df = daily_df1.fillna("0.0")
         df["Date"] = self.dp.make_date(df["Date"])
+        tickers = list(self.dp.tickers_manager.get_all_stocks_tickers()["Ticker"]) if type.lower() == "stock" \
+            else list(self.dp.tickers_manager.get_brvm_indices()["Ticker"])
+        # df.index = df["Ticker"]
+        df = df.loc[[t for t in tickers if t in df["Ticker"]]]
+        table = "stock_prices" if type.lower() == "stock" else "indices_performances"
         # Avoid duplicates
-        df = self.get_new_data_from_df(df).drop(columns=['Volume(FCFA)'])
+        df = self.get_new_data_from_df(df, table).drop(columns=['Volume(FCFA)'])
         return df
 
     def get_data_at_specific_date(self, table=None, date=None):
@@ -364,23 +402,40 @@ class BRVMDatabase:
 
     def get_prices(self, tickers=None, start_date=None, end_date=None):
         query = "SELECT * FROM stock_prices WHERE 1=1"
-        params = []
         if tickers:
-            query += " AND Ticker IN ({})".format(",".join(["?"] * len(tickers)))
-            params.extend(tickers)
+            query += " AND Ticker IN ({})".format(",".join([f"'{t}'" for t in tickers]))
         if start_date:
-            query += " AND Date >= ?"
-            params.append(start_date)
+            query += f" AND Date >= '{self.dp.make_date(start_date)}'"
         if end_date:
-            query += " AND Date <= ?"
-            params.append(end_date)
+            query += f" AND Date <= '{self.dp.make_date(end_date)}'"
         query += " ORDER BY Date DESC"
         self._connect()
-        df = pd.read_sql_query(query, self.conn, params=params, parse_dates=['Date'])
-        df.sort_values(by="Date", ascending=False)
+        df = self.execute_query(query)
+        df.index = df["Ticker"]
+        # df.sort_values(by="Date", ascending=False)
         self.close()
         return df
 
+    def get_per(self, ticker=None, date=None, col=['Date', 'Ticker', 'per']):
+        if ticker is not None:
+            ticker = [ticker] if type(ticker) is str else ticker
+            ticker = [f"'{t}'" for t in ticker]
+        query = f"SELECT {','.join(col)} FROM per_data"
+        query = query + f" WHERE Ticker in ({','.join(ticker)})" if ticker is not None else query
+        query = query + f" {'WHERE' if ticker is None else 'AND'} Date ='{self.dp.make_date(date)}'" if date is not None else query
+        query += " ORDER BY Date DESC"
+        return self.execute_query(query)
+
+    def get_close_matrix(self, tickers, startdate, enddate):
+        df = self.get_prices(tickers, startdate, enddate)
+        return df.pivot(index='Date', columns='Ticker', values='Close')
+
+    def get_fundamental(self, ticker):
+        ticker_list = [ticker] if type(ticker) is str else ticker
+        tls = ','.join([f"'{t}'" for t in ticker_list])
+        df = self.execute_query(f"SELECT * FROM fundamental_data WHERE Ticker in ({tls})")
+        df.index = df["Ticker"]
+        return df
 
 class DataPreProcessor:
 
