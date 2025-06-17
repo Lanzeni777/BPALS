@@ -24,66 +24,28 @@ class BRVMDatabase:
 
         # if os.path.exists(self.db_name) and not force:
         #    return 0
+        col = [('Date', 'TEXT NOT NULL'), ('Ticker', 'TEXT NOT NULL'), ('Description', 'TEXT NOT NULL'),
+               ('Open', 'REAL'), ('High', 'REAL'), ('Low', 'REAL'), ('Close', 'REAL'), ('Volume', 'REAL')]
+        self.create_table("stock_prices", col, ["Date", "Ticker"])
+        self.create_table("indices_performances", col, ["Date", "Ticker"])
 
-        self._connect()
+        col = [('Ticker', 'TEXT NOT NULL'), ('Date', 'TEXT NOT NULL'), ('stock_description', 'REAL'),
+               ('stock_number', 'REAL'), ('floting_cap', 'REAL'), ('globale_cap', 'REAL'), ('globale_cap_pct', 'REAL'),
+               ('trade_number', 'REAL'), ('trade_value', 'REAL'), ('globale_trade_value_pct', 'REAL'), ('PER', 'REAL')]
+        self.create_table("market_cap", col, ["Date", "Ticker"])
 
-        self.cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stock_prices (
-            Date TEXT NOT NULL,
-            Ticker TEXT NOT NULL,
-            Description TEXT NOT NULL,
-            Open REAL,
-            High REAL,
-            Low REAL,
-            Close REAL,
-            Volume REAL,
-            PRIMARY KEY (Date, Ticker)
-        )
-        """)
+        col = [('Ticker', 'TEXT NOT NULL'), ('Stock_Description', 'REAL'), ('Nombre_titres_echanges', 'REAL'),
+               ('Valeur_echangee', 'REAL'), ('PER', 'REAL'), ('Valeur_globale_echangee_pct', 'REAL'),
+               ('Date', 'TEXT NOT NULL')]
+        self.create_table("per_data", col, ["Date", "Ticker"])
 
-        self.cursor.execute("""
-                CREATE TABLE IF NOT EXISTS indices_performances (
-                    Date TEXT NOT NULL,
-                    Ticker TEXT NOT NULL,
-                    Description TEXT NOT NULL,
-                    Open REAL,
-                    High REAL,
-                    Low REAL,
-                    Close REAL,
-                    Volume REAL,
-                    PRIMARY KEY (Date, Ticker)
-                )
-                """)
-
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS capitalisations (
-                Ticker TEXT,
-                Stock_Description TEXT,
-                Nombre_de_titres REAL,
-                Cours_du_jour REAL,
-                Capitalisation_flottante REAL,
-                Capitalisation_globale REAL,
-                Capitalisation_globale_pct REAL,
-                Date TEXT,
-                PRIMARY KEY (Ticker, Date)
-            )
-        ''')
-
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS per_data (
-                Ticker TEXT,
-                Stock_Description TEXT,
-                Nombre_titres_echanges REAL,
-                Valeur_echangee REAL,
-                PER REAL,
-                Valeur_globale_echangee_pct REAL,
-                Date TEXT,
-                PRIMARY KEY (Ticker, Date)
-            )
-        ''')
-
-        self.conn.commit()
-        self.close()
+        col = [('Ticker', 'TEXT NOT NULL'), ('Volume', 'REAL'), ('Next Earnings Date', 'REAL'),
+               ('Market Cap', 'REAL'), ('Revenue', 'REAL'), ("Average_3m Volume", 'REAL'), ('EPS', 'REAL'),
+               ('P_E Ratio', 'REAL'), ('Beta', 'REAL'), ('Dividend', 'REAL'), ('Yield', 'REAL'),
+               ('Daily Trend', 'REAL'), ('Weekly Trend', 'REAL'), ('Monthly Trend', 'REAL'), ('Day perf', 'REAL'),
+               ('Week perf', 'REAL'), ('Month perf', 'REAL'), ('YTD', 'REAL'), ('Year perf', 'REAL'),
+               ('Three_Years perf', 'REAL'), ('Date', 'TEXT NOT NULL')]
+        self.create_table("fundamental_data", col, ["Date", "Ticker"])
 
     """##################################  DATA BASE STATE #################################"""
 
@@ -91,6 +53,27 @@ class BRVMDatabase:
         self.conn = sqlite3.connect(self.db_name)
         self.cursor = self.conn.cursor()
         # return self.conn, self.cursor
+
+    def create_table(self, table_name: str, columns: list, primary_key: list = None):
+        """
+        Crée une table SQLite avec les colonnes spécifiées.
+
+        Args:
+            table_name (str): nom de la table à créer
+            columns (list of tuple): liste de paires (nom_colonne, type_sqlite)
+        """
+        self._connect()
+        cols_def = ",\n    ".join([f"{name} {dtype}" for name, dtype in columns])
+        pk_clause = f",\n    PRIMARY KEY ({', '.join(primary_key)})" if primary_key else ""
+        sql = f"CREATE TABLE IF NOT EXISTS {table_name} (\n    {cols_def}{pk_clause}\n);"
+        try:
+            self.cursor.execute(sql)
+            self.conn.commit()
+            print(f"✅ Table '{table_name}' successfully  created.")
+        except Exception as e:
+            print(f"❌ Could not create the table '{table_name}':", e)
+        finally:
+            self.close()
 
     def status(self, tables=None):
         print("Table status (rows):")
@@ -126,7 +109,9 @@ class BRVMDatabase:
 
     def execute_query(self, query: str, params: tuple = ()):
         self._connect()
-        res = pd.read_sql(query, self.conn) if query.split()[0] == "SELECT" else self.cursor.execute(query, params)
+        res = pd.read_sql(query, self.conn) if query.split()[0].upper() == "SELECT" else self.cursor.execute(query,
+                                                                                                             params)
+        res = self.dp.clean_and_convert(res) if query.split()[0].upper() == "SELECT" else res
         # val = [r for r in res]
         # res = pd.read_sql(query, self.conn)
         self.conn.commit()
@@ -171,9 +156,11 @@ class BRVMDatabase:
         self.insert_daily_per()
         self.insert_daily_prices()
         self.insert_daily_indices()
+        self.insert_daily_market_cap()
+        self.insert_weekly_fundamental_data()
+
         print("\n\n=============================After daily update:=======================\n")
         self.status()
-
 
     """##################################  DELETE/UNDO #################################"""
 
@@ -187,6 +174,12 @@ class BRVMDatabase:
         self.cursor.execute(f"DELETE FROM {table}")
         self.conn.commit()
         self.close()
+
+    def delete_table(self, table):
+        confirm = input(f"You are about to permanantly delete table {table} \n Which contains"
+                        f"{self.cursor.execute(f'SELECT COUNT(*) FROM {table}')} rows of {self._get_table_columns(table)}")
+        if confirm.lower() in ["yes", "oui", "y"]:
+            self.execute_query(f"DROP TABLE {table}")
 
     def delete_last_insert(self, table):
         self._connect()
@@ -222,55 +215,53 @@ class BRVMDatabase:
 
     def insert_dataframe(self, df: pd.DataFrame, table: str):
         df = self.get_new_data_from_df(df, table)
+        if df.empty:
+            print(u'\N{check mark}' + f" No new daily data to insert into <<{table}>> table. \
+                                All entries already exist.")
+            return None
+
+        df = df[self._get_table_columns(table)]
+        df = self.dp.reset_df_index(df) if df.index.name in ["Date", "Ticker"] else df
+        df = df.drop("index", axis=1) if "index" in df else df
+        # df = df.drop("Variation", axis=1) if "Variation" in df else df
         if self.validate_dataframe(df, table):
             df = df.copy()
-            df = self.dp.reset_df_index(df) if df.index.name in ["Date", "Ticker"] else df
             self._connect()
             try:
                 df.to_sql(table, self.conn, if_exists='append', index=False)
+                print('✅' + f" {len(df)} new rows inserted into table {table}.\n")
             except Exception as e:
+                print(
+                    u'\N{cross mark}' f" Failed to insert data {df.columns}in database table {table}, maybe data already exist")
                 print("oups exception : ", e)
-                raise RuntimeError(f"Erreur d'insertion: {e}")
             finally:
-                print("Data already loaded")
                 self.close()
             self.close()
         else:
-            print("Failed to insert data in database, please check the format and try again")
+            print(f"Failed to insert data in database table {table}")
+            print(f"please check the format and try again : {df.columns}")
 
     def insert_daily_prices(self):
         df = self.get_last_prices()
-        self.validate_dataframe(df, "stock_prices")
-        if "index" in df:
-            df = df.drop("index", axis=1)
-        if "Variation" in df:
-            df = df.drop("Variation", axis=1)
         if not df.empty:
-            self._connect()
-            df.to_sql('stock_prices', self.conn, if_exists='append', index=False)
-            print(f"Inserted {len(df)} new daily rows into 'prices' table.")
+            self.insert_dataframe(df, 'stock_prices')
         else:
-            print("No new daily data to insert. All entries already exist.")
+            print(u'\N{check mark}' + f" No new daily data to insert into <<stock_prices tables>>.\
+             All entries already exist.")
 
         self.close()
         self.execute_query(f"DELETE FROM stock_prices WHERE Ticker LIKE '%BRVM%'")
 
     def insert_daily_indices(self):
-        df = self.get_last_prices()
-        df.index = df["Ticker"]
-        df = df.loc[[e for e in df["Ticker"] if "BRVM" in e]]
-        df = self.dp.reset_df_index(df)
-        self.validate_dataframe(df, "indices_performances")
-        if "index" in df:
-            df = df.drop("index", axis=1)
-        if "Variation" in df:
-            df = df.drop("Variation", axis=1)
+        df = self.get_last_prices("indices")
+        df["Volume"] = 1
+        # for col in ["Ticker", "Description"]:
+        #    df[col] = (df[col].astype(str).str.replace('-', '_', regex=False))
         if not df.empty:
-            self._connect()
-            df.to_sql('indices_performances', self.conn, if_exists='append', index=False)
-            print(f"Inserted {len(df)} new daily rows into 'indices' table.")
+            self.insert_dataframe(df, "indices_performances")
         else:
-            print("No new daily data to insert. All entries already exist.")
+            print(u'\N{check mark}' + " No new daily data to insert into <<indices_performances>> table.\
+             All entries already exist.")
 
         self.close()
 
@@ -280,7 +271,30 @@ class BRVMDatabase:
         per["Date"] = self.dp.make_date(self.dp.get_last_business_day())
         per = per[["Ticker"] + list(per.columns)[:-1]]
         per.columns = self._get_table_columns("per_data")
-        self.insert_dataframe(per, "per_data")
+        per = self.get_new_data_from_df(per, "per_data")
+        if not per.empty:
+            self.insert_dataframe(per, "per_data")
+        else:
+            print(
+                u'\N{check mark}' + " No new daily data to insert into <<per_data>> table. All entries already exist.")
+
+    def insert_daily_market_cap(self):
+        ldf = self.dp.get_today_data_from_brvm()
+        col = ['Date', 'Stock Description', 'Nombre de titres', 'Capitalisation flottante', 'Capitalisation globale',
+               'Capitalisation globale (%)', 'Nombre de titres échangés', 'Valeur échangée',
+               'valeur globale échangée %', 'PER']
+        df_m = ldf[1].merge(ldf[2], on=["Stock Description", "Date", "Ticker"])[col]
+        df_m.columns = ['Date', 'stock_description', 'stock_number', 'floting_cap', 'globale_cap', 'globale_cap_pct',
+                        'trade_number', 'trade_value', 'globale_trade_value_pct', 'PER']
+        df_m["Date"] = self.dp.make_date(df_m['Date'])
+        df_m.index.name = "Ticker"
+        df_m = self.dp.reset_df_index(df_m)
+        df_m = self.get_new_data_from_df(df_m, "market_cap")
+        if not df_m.empty:
+            self.insert_dataframe(df_m, "market_cap")
+        else:
+            print(u'\N{check mark}' + " No new daily data to insert into <<market_cap>> table. \
+                    All entries already exist.")
 
     def insert_3m_histo_data(self, df=None):
         # === 1. Connect to SQLite DB ===
@@ -296,7 +310,7 @@ class BRVMDatabase:
             merged_df.to_sql('stock_prices', self.conn, if_exists='append', index=False)
             print(f"Inserted {len(merged_df)} new rows into 'prices' table.")
         else:
-            print("No new data to insert. All entries already exist.")
+            print("No new data to insert in <<stock_prices>>. All entries already exist.")
 
         self.close()
 
@@ -305,6 +319,16 @@ class BRVMDatabase:
         df_merged = self.merge_dfs(dfs)
         # display(df_merged)
         self.insert_dataframe(self.dp.reset_df_index(df_merged), "stock_prices")
+
+    def insert_weekly_fundamental_data(self):
+        fdata = FundamentalData()
+        df = self.dp.clean_and_convert(fdata.df)
+        df = self.get_new_data_from_df(df, "fundamental_data")
+        if not df.empty:
+            self.insert_dataframe(df, "fundamental_data")
+        else:
+            print(u'\N{check mark}' + " No new daily data to insert into <<fundamental_data>> table. \
+                                All entries already exist.")
 
     """##################################  DATA GETTER #################################"""
 
@@ -341,11 +365,12 @@ class BRVMDatabase:
         df["Date"] = self.dp.make_date(df["Date"])
         tickers = list(self.dp.tickers_manager.get_all_stocks_tickers()["Ticker"]) if type.lower() == "stock" \
             else list(self.dp.tickers_manager.get_brvm_indices()["Ticker"])
-        # df.index = df["Ticker"]
+        df.index = df["Ticker"]
         df = df.loc[[t for t in tickers if t in df["Ticker"]]]
         table = "stock_prices" if type.lower() == "stock" else "indices_performances"
         # Avoid duplicates
-        df = self.get_new_data_from_df(df, table).drop(columns=['Volume(FCFA)'])
+        df = self.get_new_data_from_df(df, table).drop(columns=['Volume(FCFA)', 'Variation'])
+        df = self.dp.clean_and_convert(df)
         return df
 
     def get_data_at_specific_date(self, table=None, date=None):
@@ -396,7 +421,7 @@ class BRVMDatabase:
         df['Date'] = self.dp.make_date(df['Date'])
         check_df = df.merge(existing, on=['Date', 'Ticker'], how='left', indicator=True)
         # display(check_df.head())
-        df = check_df[check_df['_merge'] == 'left_only'].drop(columns=['_merge'])
+        df = self.dp.clean_and_convert(check_df[check_df['_merge'] == 'left_only'].drop(columns=['_merge']))
         self.close()
         return df
 
@@ -434,6 +459,13 @@ class BRVMDatabase:
         ticker_list = [ticker] if type(ticker) is str else ticker
         tls = ','.join([f"'{t}'" for t in ticker_list])
         df = self.execute_query(f"SELECT * FROM fundamental_data WHERE Ticker in ({tls})")
+        df.index = df["Ticker"]
+        return df
+
+    def get_market_cap(self, ticker):
+        ticker_list = [ticker] if type(ticker) is str else ticker
+        tls = ','.join([f"'{t}'" for t in ticker_list])
+        df = self.execute_query(f"SELECT * FROM market_cap WHERE Ticker in ({tls})")
         df.index = df["Ticker"]
         return df
 
@@ -525,7 +557,8 @@ class DataPreProcessor:
                     df.index = df["Ticker"]
                     df = df.drop("Ticker", axis=1)
                 else:
-                    df.index = [self.tickers_manager.get_ticker(des) for des in df["Description"]]
+                    df.index = [self.tickers_manager.get_ticker(des, print_missing=print_url) for des in
+                                df["Description"]]
             else:
                 df.set_index(output_col[0], inplace=True)
             df = self.clean_and_convert(df)
@@ -625,6 +658,11 @@ class DataPreProcessor:
                     .str.replace(',', '', regex=False)
                     .str.strip()
                 )
+                try:
+                    if "%" in df_clean[col][0]:
+                        df_clean[col] = [float(e.replace("%", "")) / 100.0 for e in list(df_clean[col])]
+                except:
+                    pass
                 # Essaie de convertir en entier si possible
                 try:
                     df_clean[col] = df_clean[col].astype(int)
@@ -758,16 +796,18 @@ class BRVMTICKERS:
     def get_brvm_indices(self):
         return pd.DataFrame(self.indices_data, columns=["Ticker", "Description", "Country_Code"])
 
-    def get_ticker(self, des, pos=[0]):
+    def get_ticker(self, des, pos=[0], print_missing=False):
         df = self.get_all_brvm_tickers()
-        pos_ = pos[0] if len(pos) == 1 else pos
+        # pos_ = pos[0] if len(pos) == 1 else pos
         try:
             # des_modified = ' '.join(v.split()[:-1])
             res = list(df[df["Description"].str.contains(des, case=False, na=False)]["Ticker"])
             res = [res[i] for i in pos] if len(pos) > 1 else res[0]
             return res
         except:
-            print(f"Description {des} not found")
+            if print_missing:
+                print(f"No Ticker correspond to description : {des}")
+            return None
 
     def get_country(self, stock, pos=[0]):
         df = self.get_all_brvm_tickers()
@@ -782,3 +822,52 @@ class BRVMTICKERS:
             return list(df[df["Ticker"] == stock]["Description"])[0]
         except:
             print(f"Description for stock {stock} not found")
+
+
+class FundamentalData:
+    def __init__(self, fundamentals_df=None):
+        """
+        Must contain columns: ['ticker', 'PER', 'PB', 'ROE', 'NetMargin', 'Growth']
+        """
+        self.df = fundamentals_df.set_index('Ticker') if fundamentals_df is not None else self.get_fundamentals()
+
+    def get_fundamentals(self):
+        file = os.listdir("../DataBase/FundamentalData")[0]
+        date = file.split(".")[0].split("_")[-1]
+        date = f"{date[-4:]}-{date[:2]}-{date[2:4]}"
+        df = pd.read_csv(f"../DataBase/FundamentalData/{file}")
+        df.index, df.index.name = [e.split(".")[0] for e in df["Symbol"]], "Ticker"
+        df["Date"] = date  # f"{datetime.today().year}-{df['Time'][0].split('/')[1]}-{df['Time'][0].split('/')[0]}"
+        df = df.drop(["Name", "Symbol", "Exchange", 'Bid', 'Ask',
+                      'Extended Hours', 'Extended Hours (%)', '5 Minutes',
+                      '15 Minutes', '30 Minutes', 'Hourly', '5 Hours', 'Time',
+                      'Last', 'Open', 'Prev.', 'High', 'Low', 'Chg.', 'Chg. %'], axis=1)
+        df = (df
+              .replace("Strong Sell", -1)
+              .replace("Strong Buy", 1)
+              .replace("Neutral", 0)
+              .replace("Sell", -0.5)
+              .replace("Buy", 0.5)
+              )
+        # df["Ticker"] = list(df.index)
+        df.columns = ['Volume', 'Next Earnings Date', 'Market Cap', 'Revenue',
+                      'Average 3m Volume', 'EPS', 'P/E Ratio', 'Beta', 'Dividend', 'Yield',
+                      'Daily Trend', 'Weekly Trend', 'Monthly Trend', '1 Day perf', '1 Week perf', '1 Month perf',
+                      'YTD',
+                      '1 Year perf', '3 Years perf', 'Date']
+        return df.reset_index(inplace=False)
+
+    def get_per(self):
+        return self.df['PER']
+
+    def get_pb(self):
+        return self.df['PB']
+
+    def get_roe(self):
+        return self.df['ROE']
+
+    def get_margin(self):
+        return self.df['NetMargin']
+
+    def get_growth(self):
+        return self.df['Growth']

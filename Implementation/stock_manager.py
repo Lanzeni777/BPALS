@@ -74,20 +74,12 @@ class StockEvaluator:
         return normalized_dict
 
     def rank_stocks(self, ticker_list, start_date="2020-01-01"):
-        stock_prices = self.database.get_prices(ticker_list, start_date)  # , "2025-05-30")
-        stock_fd = self.database.get_fundamental(ticker_list)
-        stock_fd["PER"], stock_fd["Capitalisation_flottante"] = self.database.get_per(ticker_list)["PER"], 1000000
-        stock_list = [Stock(tck, stock_prices.loc[tck], stock_fd.loc[tck]) for tck in ticker_list \
-                      if tck in stock_fd.index and tck in stock_prices.index]
+        stock_list = self.get_stock_list(ticker_list, start_date)
         scored = [(st.ticker, self.compute_score(st)) for st in stock_list]
         return pd.DataFrame(sorted(scored, key=lambda x: x[1], reverse=True), columns=["Ticker", "Score"])
 
     def relative_rank_stocks(self, ticker_list, start_date="2020-01-01"):
-        stock_prices = self.database.get_prices(ticker_list, start_date)  # , "2025-05-30")
-        stock_fd = self.database.get_fundamental(ticker_list)
-        stock_fd["PER"], stock_fd["Capitalisation_flottante"] = self.database.get_per(ticker_list)["PER"], 1000000
-        stock_list = [Stock(tck, stock_prices.loc[tck], stock_fd.loc[tck]) for tck in ticker_list\
-                  if tck in stock_fd.index and tck in stock_prices.index]
+        stock_list = self.get_stock_list(ticker_list, start_date)
         # scored = [(st.ticker, self.compute_score(st)) for st in stock_list]
         normalized = self.relative_normalize(stock_list)
         scored = []
@@ -96,8 +88,56 @@ class StockEvaluator:
                 self.criteria[key] * normalized[stock.ticker].get(key, 0.0)
                 for key in self.criteria
             )
-            scored.append((stock, score))
+            scored.append((stock.ticker, score))
         return pd.DataFrame(sorted(scored, key=lambda x: x[1], reverse=True), columns=["Ticker", "RelativeScore"])
+
+    def value_rank_stocks(self, ticker_list, start_date="2020-01-01"):
+        stock_list = self.get_stock_list(ticker_list, start_date)
+        value_criteria = {
+            "per": 0.4,
+            "cap_flo": 0.2,
+            "yield": 0.2,
+            "volatility": 0.2
+        }
+        all_scores = {key: [] for key in value_criteria.keys()}
+        for stock in stock_list:
+            for key in value_criteria:
+                val = stock.get_indicator(key)
+                all_scores[key].append(val if val is not None else np.nan)
+
+        norm_results = {}
+        for key in value_criteria:
+            values = np.array(all_scores[key], dtype=np.float64)
+            if np.all(np.isnan(values)):
+                norm_results[key] = np.full(len(values), 0.0)
+            else:
+                min_val = np.nanmin(values)
+                max_val = np.nanmax(values)
+                span = max_val - min_val if max_val > min_val else 1
+                if key in ["per", "cap_flo", "volatility"]:
+                    norm_results[key] = 1 - (values - min_val) / span
+                else:
+                    norm_results[key] = (values - min_val) / span
+
+        scored = []
+        for i, stock in enumerate(stock_list):
+            score = sum(
+                value_criteria[key] * float(norm_results[key][i])
+                for key in value_criteria
+            )
+            scored.append((stock.ticker, score))
+
+        return pd.DataFrame(sorted(scored, key=lambda x: x[1], reverse=True), columns=["Ticker", "value_score"])
+
+    def get_stock_list(self, ticker_list, start_date="2020-01-01"):
+        stock_prices = self.database.get_prices(ticker_list, start_date)  # , "2025-05-30")
+        stock_fd = self.database.get_fundamental(ticker_list)
+        stock_fd["PER"] = self.database.get_per(ticker_list)["PER"]
+        stock_fd["Capitalisation_flottante"] = self.database.get_fundamental(ticker_list)["floating_cap"]
+        stock_list = [Stock(tck, stock_prices.loc[tck], stock_fd.loc[tck]) for tck in ticker_list \
+                      if tck in stock_fd.index and tck in stock_prices.index]
+        return stock_list
+
 
     def build_stocks_from_data(self, price_df: pd.DataFrame, fundamental_df: pd.DataFrame):
         grouped = price_df.groupby("Ticker")

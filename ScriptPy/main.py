@@ -11,15 +11,20 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname("."), '..')))
 from DataBase.DBUtilities import BRVMDatabase, DataPreProcessor
 from Implementation.stock_manager import Stock, StockEvaluator
 
-if __name__ == '__main__':
-    kl_db = BRVMDatabase("KAN.db")
-    update_data = False
-    if update_data:
-        kl_db.update()
+
+def rank_all_stock():
     ticker_list = list(kl_db.dp.tickers_manager.get_all_stocks_tickers()["Ticker"])
     stock_eval = StockEvaluator(kl_db)
     print(stock_eval.rank_stocks(ticker_list))
     print(stock_eval.relative_rank_stocks(ticker_list))
+    print(stock_eval.value_rank_stocks(ticker_list))
+
+
+if __name__ == '__main__':
+    kl_db = BRVMDatabase("KAN.db")
+    update_data = True
+    if update_data:
+        kl_db.update()
 
 
 def main_1306_getter():
