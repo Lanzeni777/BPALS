@@ -12,19 +12,22 @@ from DataBase.DBUtilities import BRVMDatabase, DataPreProcessor
 from Implementation.stock_manager import Stock, StockEvaluator
 
 
-def rank_all_stock():
-    ticker_list = list(kl_db.dp.tickers_manager.get_all_stocks_tickers()["Ticker"])
-    stock_eval = StockEvaluator(kl_db)
+def update_data(db: BRVMDatabase, do=False):
+    db.update() if do else None
+
+
+def rank_all_stock(db):
+    ticker_list = list(db.dp.tickers_manager.get_all_stocks_tickers()["Ticker"])
+    stock_eval = StockEvaluator(db)
     print(stock_eval.rank_stocks(ticker_list))
     print(stock_eval.relative_rank_stocks(ticker_list))
     print(stock_eval.value_rank_stocks(ticker_list))
 
 
 if __name__ == '__main__':
-    kl_db = BRVMDatabase("KAN.db")
-    update_data = True
-    if update_data:
-        kl_db.update()
+    kdb = BRVMDatabase("KAN.db")
+    update_data(kdb)
+    rank_all_stock(kdb)
 
 
 def main_1306_getter():

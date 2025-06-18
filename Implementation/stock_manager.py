@@ -1,8 +1,10 @@
 import pandas as pd
 import numpy as np
+from DataBase.DBUtilities import BRVMDatabase
+
 
 class StockEvaluator:
-    def __init__(self, database, criteria=None):
+    def __init__(self, database: BRVMDatabase, criteria=None):
         self.database = database
         self.criteria = criteria or {
             "momentum": 0.3,
@@ -131,13 +133,17 @@ class StockEvaluator:
 
     def get_stock_list(self, ticker_list, start_date="2020-01-01"):
         stock_prices = self.database.get_prices(ticker_list, start_date)  # , "2025-05-30")
-        stock_fd = self.database.get_fundamental(ticker_list)
-        stock_fd["PER"] = self.database.get_per(ticker_list)["PER"]
-        stock_fd["Capitalisation_flottante"] = self.database.get_fundamental(ticker_list)["floating_cap"]
+        stock_fd = self.database.get_most_recent_data("fundamental_data")  # get_fundamental(ticker_list)
+        # per = self.database.get_per(ticker_list)
+        # stock_fd["PER"] = self.database.get_per(ticker_list)["PER"]
+        sd, temp = self.database.get_most_recent_data("market_cap"), list(stock_fd["Ticker"])
+        sd.index, stock_fd.index, temp = sd["Ticker"], stock_fd["Ticker"], list(set(temp) & set(list(sd["Ticker"])))
+        sd, stock_fd = sd.loc[temp], stock_fd.loc[temp]
+        stock_fd["Capitalisation_flottante"], stock_fd["PER"] = list(sd["floting_cap"]), list(sd["PER"])
         stock_list = [Stock(tck, stock_prices.loc[tck], stock_fd.loc[tck]) for tck in ticker_list \
                       if tck in stock_fd.index and tck in stock_prices.index]
+        print(f"Ticker exclude during stock construction : {list(set(ticker_list) - set(temp))}")
         return stock_list
-
 
     def build_stocks_from_data(self, price_df: pd.DataFrame, fundamental_df: pd.DataFrame):
         grouped = price_df.groupby("Ticker")
@@ -163,7 +169,8 @@ class Stock:
             self.indicators["volatility"] = self.price_df["Close"].pct_change().rolling(5).std().iloc[-1]
             self.indicators["volume"] = self.price_df["Volume"].rolling(5).mean().iloc[-1]
         if len(self.price_df) >= 30:
-            self.indicators["relative_price"] = self.price_df["Close"].iloc[-1] / self.price_df["Close"].rolling(30).mean().iloc[-1]
+            self.indicators["relative_price"] = self.price_df["Close"].iloc[-1] / \
+                                                self.price_df["Close"].rolling(30).mean().iloc[-1]
 
         if not fund_row.empty:
             for col in ['PER', 'Yield', 'Capitalisation_flottante']:

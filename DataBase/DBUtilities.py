@@ -12,7 +12,7 @@ from IPython.display import display
 
 class BRVMDatabase:
     def __init__(self, db_name="KLBrvm_DataBase.db",
-                 root_path="C:\\Users\\charl\\Documents\\KLDocs\\BPALS\\DataBase") -> object:
+                 root_path="C:\\Users\\charl\\Documents\\KLDocs\\BPALS\\DataBase"):
         self.root = root_path
         self.db_name = f"{self.root}\\{db_name}"
         self._init_db()
@@ -66,14 +66,15 @@ class BRVMDatabase:
         cols_def = ",\n    ".join([f"{name} {dtype}" for name, dtype in columns])
         pk_clause = f",\n    PRIMARY KEY ({', '.join(primary_key)})" if primary_key else ""
         sql = f"CREATE TABLE IF NOT EXISTS {table_name} (\n    {cols_def}{pk_clause}\n);"
-        try:
-            self.cursor.execute(sql)
-            self.conn.commit()
-            print(f"✅ Table '{table_name}' successfully  created.")
-        except Exception as e:
-            print(f"❌ Could not create the table '{table_name}':", e)
-        finally:
-            self.close()
+        if table_name not in self.get_all_tables():
+            try:
+                self.cursor.execute(sql)
+                self.conn.commit()
+                print(f"✅ Table '{table_name}' successfully  created.")
+            except Exception as e:
+                print(f"❌ Could not create the table '{table_name}':", e)
+            finally:
+                self.close()
 
     def status(self, tables=None):
         print("Table status (rows):")
@@ -323,6 +324,7 @@ class BRVMDatabase:
     def insert_weekly_fundamental_data(self):
         fdata = FundamentalData()
         df = self.dp.clean_and_convert(fdata.df)
+        df["Date"] = self.dp.make_date(df["Date"])
         df = self.get_new_data_from_df(df, "fundamental_data")
         if not df.empty:
             self.insert_dataframe(df, "fundamental_data")
@@ -338,6 +340,10 @@ class BRVMDatabase:
         res = [row[1] for row in self.cursor.fetchall()]
         self.close()
         return res
+
+    def get_most_recent_data(self, table):
+        q = f"SELECT * FROM {table} WHERE Date = (SELECT MAX(Date) FROM {table});"
+        return self.execute_query(q)
 
     def get_value(self, table: str, columns='*', condition: str = '', order_by: str = '', limit: int = None):
         query = f"SELECT {columns} FROM {table}"
@@ -376,6 +382,8 @@ class BRVMDatabase:
     def get_data_at_specific_date(self, table=None, date=None):
         dfs = []
         if not table is None:
+            if date is None:
+                return self.get_most_recent_data(table)
             query_condition = f" WHERE Date = '{date}'" if not date is None else ""
             df = pd.DataFrame(
                 self.execute_query(f"SELECT * FROM {table}{query_condition}"),
@@ -385,9 +393,12 @@ class BRVMDatabase:
             dfs.append(df)
         else:
             for t_name in self.tables:
-                df = pd.DataFrame(self.execute_query(
-                    f"SELECT * FROM {t_name + ' WHERE Date = ' + date if not date is None else t_name}"),
-                    columns=self._get_table_columns(t_name))
+                if date is None:
+                    df = self.get_most_recent_data(t_name)
+                else:
+                    df = pd.DataFrame(self.execute_query(
+                        f"SELECT * FROM {t_name + ' WHERE Date = ' + date if not date is None else t_name}"),
+                        columns=self._get_table_columns(t_name))
                 df.index = df["Ticker"]
                 df = df.drop('Ticker', axis=1)
                 dfs.append(df)
@@ -441,7 +452,7 @@ class BRVMDatabase:
         self.close()
         return df
 
-    def get_per(self, ticker=None, date=None, col=['Date', 'Ticker', 'per']):
+    def get_per(self, ticker=None, date=None, col=['Date', 'Ticker', 'PER']):
         if ticker is not None:
             ticker = [ticker] if type(ticker) is str else ticker
             ticker = [f"'{t}'" for t in ticker]
@@ -468,6 +479,7 @@ class BRVMDatabase:
         df = self.execute_query(f"SELECT * FROM market_cap WHERE Ticker in ({tls})")
         df.index = df["Ticker"]
         return df
+
 
 class DataPreProcessor:
 
@@ -568,8 +580,8 @@ class DataPreProcessor:
             return self.get_col_from_rows(rows, [i for i in range(len(str(rows[0]).split("</td>")) - 1)])
 
     def get_col_from_rows(self, rows, col_id, date=None,
-                          exclude=["Valeur des transactions", "Capitalisation Actions",
-                                   "Capitalisation des obligations"]):
+                          exclude=("Valeur des transactions", "Capitalisation Actions",
+                                   "Capitalisation des obligations")):
         data = []
         date = self.get_last_business_day() if date is None else date
         for row in rows:
@@ -832,7 +844,7 @@ class FundamentalData:
         self.df = fundamentals_df.set_index('Ticker') if fundamentals_df is not None else self.get_fundamentals()
 
     def get_fundamentals(self):
-        file = os.listdir("../DataBase/FundamentalData")[0]
+        file = os.listdir("../DataBase/FundamentalData")[-1]
         date = file.split(".")[0].split("_")[-1]
         date = f"{date[-4:]}-{date[:2]}-{date[2:4]}"
         df = pd.read_csv(f"../DataBase/FundamentalData/{file}")
