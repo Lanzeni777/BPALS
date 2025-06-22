@@ -2,6 +2,7 @@ import sqlite3
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 import os, sys
 import urllib3
@@ -444,10 +445,27 @@ class BRVMDatabase:
             query += f" AND Date >= '{self.dp.make_date(start_date)}'"
         if end_date:
             query += f" AND Date <= '{self.dp.make_date(end_date)}'"
-        query += " ORDER BY Date DESC"
+        query += " ORDER BY Date DESC,Ticker ASC;"
         self._connect()
         df = self.execute_query(query)
         df.index = df["Ticker"]
+        # df.sort_values(by="Date", ascending=False)
+        self.close()
+        return df
+
+    def get_fundamentals(self, tickers=None, start_date=None, end_date=None):
+        query = "SELECT * FROM fundamental_data WHERE 1=1"
+        if tickers:
+            query += " AND Ticker IN ({})".format(",".join([f"'{t}'" for t in tickers]))
+        if start_date:
+            query += f" AND Date >= '{self.dp.make_date(start_date)}'"
+        if end_date:
+            query += f" AND Date <= '{self.dp.make_date(end_date)}'"
+        query += " ORDER BY Date DESC,Ticker ASC;"
+        self._connect()
+        df = self.execute_query(query)
+        df.index = df["Ticker"]
+        df = df.drop("", axis=0)
         # df.sort_values(by="Date", ascending=False)
         self.close()
         return df
@@ -466,18 +484,19 @@ class BRVMDatabase:
         df = self.get_prices(tickers, startdate, enddate)
         return df.pivot(index='Date', columns='Ticker', values='Close')
 
-    def get_fundamental(self, ticker):
+    def get_stock_fundamental(self, ticker):
         ticker_list = [ticker] if type(ticker) is str else ticker
         tls = ','.join([f"'{t}'" for t in ticker_list])
         df = self.execute_query(f"SELECT * FROM fundamental_data WHERE Ticker in ({tls})")
         df.index = df["Ticker"]
         return df
 
-    def get_market_cap(self, ticker):
-        ticker_list = [ticker] if type(ticker) is str else ticker
+    def get_market_cap(self, ticker=None):
+        ticker_list = ([ticker] if type(ticker) is str else ticker) if ticker is not None else list(
+            self.dp.tickers_manager.get_all_brvm_tickers()["Ticker"])
         tls = ','.join([f"'{t}'" for t in ticker_list])
         df = self.execute_query(f"SELECT * FROM market_cap WHERE Ticker in ({tls})")
-        df.index = df["Ticker"]
+        # df.index = df["Ticker"]
         return df
 
 
@@ -654,8 +673,10 @@ class DataPreProcessor:
             last_business_day -= pd.Timedelta(days=1)
         return last_business_day.strftime('%Y-%m-%d')
 
-    def clean_and_convert(self, df, col_to_exclude=["Date", "Ticker", "Description", "Variation"]):
+    def clean_and_convert(self, df, col_to_exclude=["Date", "Ticker", "Description", "Variation"], fillna=False):
         df_clean, dd = df.copy(), None
+        if fillna:
+            df_clean = df_clean.fillna("0.0").replace("nan", "0.0")
         if "Date" in df_clean:
             dd = df_clean["Date"].astype(str)  # self.make_date(df_clean["Date"])
         for col in df_clean.columns:
@@ -663,23 +684,21 @@ class DataPreProcessor:
                 # Supprime espaces insécables, normaux, et convertit en int si possible
                 df_clean[col] = (
                     df_clean[col]
+                    .replace('-', 0, regex=False)
                     .astype(str)
                     .str.replace('\xa0', '', regex=False)
                     .str.replace(' ', '', regex=False)
-                    .str.replace('-', '0.0', regex=False)
                     .str.replace(',', '', regex=False)
                     .str.strip()
                 )
                 try:
                     if "%" in df_clean[col][0]:
                         df_clean[col] = [float(e.replace("%", "")) / 100.0 for e in list(df_clean[col])]
+                    else:
+                        df_clean[col] = df_clean[col].astype(int)
                 except:
                     pass
                 # Essaie de convertir en entier si possible
-                try:
-                    df_clean[col] = df_clean[col].astype(int)
-                except ValueError:
-                    pass  # Ignore si conversion impossible
         if not dd is None:
             df_clean["Date"] = dd
         return df_clean
@@ -692,6 +711,22 @@ class DataPreProcessor:
             df = df.drop(df.index.name, axis=1)
         df.reset_index(inplace=True)
         return df
+
+    def impute_missing(self, df: pd.DataFrame, method="forward"):
+        df = df.replace([np.inf, -np.inf], np.nan)
+        for col in df.columns:
+            try:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            except:
+                pass
+        if method == "forward":
+            return df.groupby('Ticker').transform(lambda x: x.ffill().replace([np.inf, -np.inf], 0))
+        elif method == "mean":
+            return df.groupby("Ticker").transform(lambda x: x.fillna(x.mean()).replace([np.inf, -np.inf], 0))
+        elif method == "median":
+            return df.groupby("Ticker").transform(lambda x: x.fillna(x.median()).replace([np.inf, -np.inf], 0))
+        else:
+            return df.replace([np.inf, -np.inf], 0)
 
     def get_historical_data(self):
         d = self.tickers_manager.get_all_stocks_tickers()
