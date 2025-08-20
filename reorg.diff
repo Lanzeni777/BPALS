@@ -1,0 +1,140 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+--- /dev/null
++++ b/.gitignore
+@@
++# Byte-compiled / caches
++__pycache__/
++*.py[cod]
++.ipynb_checkpoints/
++
++# Environments
++.env
++.venv/
++venv/
++
++# Data & DBs
++data/
++*.sqlite
++*.db
++BRVM_Project_Spec_Master.xlsx
++
++# Jupyter outputs
++*.nbconvert.ipynb
+diff --git a/pyproject.toml b/pyproject.toml
+new file mode 100644
+--- /dev/null
++++ b/pyproject.toml
+@@
++[build-system]
++requires = ["setuptools", "wheel"]
++build-backend = "setuptools.build_meta"
++
++[project]
++name = "bpals"
++version = "0.1.0"
++description = "BRVM Portfolio Allocation Strategies"
++authors = [{name="Lanzeni"}]
++dependencies = [
++  "pandas>=1.5",
++  "numpy>=1.24",
++  "matplotlib>=3.6",
++  "scipy>=1.9",
++  "pytest>=7.0"
++]
+diff --git a/src/bpals/__init__.py b/src/bpals/__init__.py
+new file mode 100644
+--- /dev/null
++++ b/src/bpals/__init__.py
+@@
++__version__ = "0.1.0"
++
++from .data import load_prices
++from .backtest import run_backtest
+diff --git a/src/bpals/data.py b/src/bpals/data.py
+new file mode 100644
+--- /dev/null
++++ b/src/bpals/data.py
+@@
++import pandas as pd
++from pathlib import Path
++
++DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
++
++def load_prices(symbol: str) -> pd.DataFrame:
++    """Load processed price data for a given symbol"""
++    path = DATA_ROOT / f"{symbol}.csv"
++    return pd.read_csv(path, index_col=0, parse_dates=True)
+diff --git a/src/bpals/backtest.py b/src/bpals/backtest.py
+new file mode 100644
+--- /dev/null
++++ b/src/bpals/backtest.py
+@@
++import pandas as pd
++
++def run_backtest(prices: pd.DataFrame, strategy) -> pd.DataFrame:
++    """Run a simple backtest on given prices using a strategy callable"""
++    signals = strategy(prices)
++    returns = prices.pct_change().fillna(0)
++    pnl = (signals.shift(1) * returns).sum(axis=1).cumsum()
++    return pnl
+diff --git a/scripts/run_backtest.py b/scripts/run_backtest.py
+new file mode 100644
+--- /dev/null
++++ b/scripts/run_backtest.py
+@@
++import pandas as pd
++from bpals.backtest import run_backtest
++from bpals.data import load_prices
++
++def simple_strategy(prices: pd.DataFrame):
++    """Naive strategy: always long"""
++    return pd.DataFrame(1, index=prices.index, columns=prices.columns)
++
++if __name__ == "__main__":
++    prices = load_prices("example")  # expects data/example.csv
++    pnl = run_backtest(prices, simple_strategy)
++    print(pnl.tail())
+diff --git a/notebooks/.gitkeep b/notebooks/.gitkeep
+new file mode 100644
+--- /dev/null
++++ b/notebooks/.gitkeep
+@@
++#
+diff --git a/data/.gitkeep b/data/.gitkeep
+new file mode 100644
+--- /dev/null
++++ b/data/.gitkeep
+@@
++#
+diff --git a/tests/test_basic.py b/tests/test_basic.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_basic.py
+@@
++from bpals.backtest import run_backtest
++import pandas as pd
++
++def test_backtest_runs():
++    dates = pd.date_range("2020-01-01", periods=5)
++    prices = pd.DataFrame({"A": [1,2,3,4,5]}, index=dates)
++    pnl = run_backtest(prices, lambda x: pd.DataFrame(1, index=x.index, columns=x.columns))
++    assert len(pnl) == 5
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@
++name: CI
++on: [push, pull_request]
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-python@v4
++        with:
++          python-version: 3.10
++      - run: pip install -U pip
++      - run: pip install .
++      - run: pytest -q
