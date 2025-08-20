@@ -11,6 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname("."), '..')))
 from DataBase.DBUtilities import BRVMDatabase, DataPreProcessor
 from Implementation.stock_picking_heuristic import Stock, StockEvaluator
 from Implementation.stock_factorial_analysis import FactorAnalytics
+from Implementation.backtesting import Backtester
 
 
 def update_data(db: BRVMDatabase, do=False):
@@ -35,7 +36,7 @@ def do_factors_analysis(show_graph=False):
     fact_an = FactorAnalytics()
     df, col = fact_an.build_features()
     # df.set_index(['Date', 'Ticker'], inplace=True)
-    res = fact_an.run_pca(df, col[1:])
+    res = fact_an.run_pca(df)
     fact_an.explained_variance()
     fact_an.plot_pca_scatter()
     return fact_an.rank_latest_scores(col[1:])
@@ -43,11 +44,16 @@ def do_factors_analysis(show_graph=False):
 
 
 if __name__ == '__main__':
-    # kdb = BRVMDatabase("KAN.db")
+    kdb = BRVMDatabase("KAN.db")
     # update_data(kdb, True)
     # rank_all_stock(kdb)
-    df1 = do_picking_analysis()
-    df2 = do_factors_analysis()
+    # df1 = do_picking_analysis()
+    # df2 = do_factors_analysis()
+    bt = Backtester(kdb, start_date="2019-01-01", method="auto")
+    df = bt.backtest_score()
+    a = bt.pca_df['Ret_1M_fwd'].describe()
+    b = bt.pca_df['Ret_1M_fwd'].sort_values(ascending=False).head(10)
+    res = bt.plot_cumulative_returns()
 
     input("End")
 

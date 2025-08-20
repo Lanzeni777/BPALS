@@ -5,6 +5,9 @@ from DataBase.DBUtilities import BRVMDatabase
 
 class StockEvaluator:
     def __init__(self, database: BRVMDatabase, criteria=None):
+        self.ticker_list = None
+        self.stock_list = None
+        self.stock_fd = None
         self.database = database
         self.criteria = criteria or {
             "momentum": 0.3,
@@ -131,15 +134,15 @@ class StockEvaluator:
 
         return pd.DataFrame(sorted(scored, key=lambda x: x[1], reverse=True), columns=["Ticker", "value_score"])
 
-    def hybrid_rank_stocks(self, ticker_list=None, weight=None):
+    def hybrid_rank_stocks(self, ticker_list=None, weight=None, start_date="2015-01-01"):
         weight = [1/3, 1/3, 1/3] if weight is None else weight
         w_simple, w_value, w_relative = weight
         ticker_list = list(self.database.dp.tickers_manager.get_all_stocks_tickers()["Ticker"]) if ticker_list is None else ticker_list
-        rel_scores = self.relative_rank_stocks(ticker_list)
+        rel_scores = self.relative_rank_stocks(ticker_list, start_date)
         rel_scores.index = rel_scores["Ticker"]
-        val_scores = self.value_rank_stocks(ticker_list)
+        val_scores = self.value_rank_stocks(ticker_list, start_date)
         val_scores.index = val_scores["Ticker"]
-        simple_scores = self.rank_stocks(ticker_list)
+        simple_scores = self.rank_stocks(ticker_list, start_date)
         simple_scores.index = simple_scores["Ticker"]
         common_stocks = list(set(list(rel_scores["Ticker"])) & set(list(val_scores["Ticker"])))
         hybrid_scores = []
@@ -151,7 +154,9 @@ class StockEvaluator:
             hybrid_scores.append((stock, final_score))
         return pd.DataFrame(sorted(hybrid_scores, key=lambda x: x[1], reverse=True), columns=["Ticker", "HY_score"])
 
-    def get_stock_list(self, ticker_list, start_date="2020-01-01"):
+    def get_stock_list(self, ticker_list, start_date="2020-01-01", force_update=False):
+        if self.ticker_list is not None and ticker_list == self.ticker_list and force_update:
+            return self.stock_list
         stock_prices = self.database.get_prices(ticker_list, start_date)  # , "2025-05-30")
         stock_fd = self.database.get_most_recent_data("fundamental_data")  # get_fundamental(ticker_list)
         # per = self.database.get_per(ticker_list)
@@ -163,7 +168,14 @@ class StockEvaluator:
         stock_list = [Stock(tck, stock_prices.loc[tck], stock_fd.loc[tck]) for tck in ticker_list \
                       if tck in stock_fd.index and tck in stock_prices.index]
         print(f"Ticker exclude during stock construction : {list(set(ticker_list) - set(temp))}")
+        self.ticker_list = ticker_list
+        self.stock_fd = stock_fd
+        self.stock_list = stock_list
         return stock_list
+
+    def get_completed_df(self, list_ticker, how="inner"):
+        ranked_df = self.hybrid_rank_stocks(list_ticker)
+        return self.stock_fd.merge(ranked_df, on=["Date", "Ticker"], how=how)
 
     def build_stocks_from_data(self, price_df: pd.DataFrame, fundamental_df: pd.DataFrame):
         grouped = price_df.groupby("Ticker")
